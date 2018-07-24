@@ -1,7 +1,10 @@
 from __future__ import absolute_import, unicode_literals
+
 import os
-import pytest
 from functools import wraps
+
+import pytest
+
 from celery.contrib.testing.manager import Manager
 
 TEST_BROKER = os.environ.get('TEST_BROKER', 'pyamqp://')
@@ -19,6 +22,15 @@ def flaky(fun):
                     raise
     _inner.__wrapped__ = fun
     return _inner
+
+
+def get_redis_connection():
+    from redis import StrictRedis
+    return StrictRedis(host=os.environ.get('REDIS_HOST'))
+
+
+def get_active_redis_channels():
+    return get_redis_connection().execute_command('PUBSUB CHANNELS')
 
 
 @pytest.fixture(scope='session')

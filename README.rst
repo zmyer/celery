@@ -1,10 +1,10 @@
 .. image:: http://docs.celeryproject.org/en/latest/_images/celery-banner-small.png
 
-|build-status| |license| |wheel| |pyversion| |pyimp|
+|build-status| |coverage| |license| |wheel| |pyversion| |pyimp| |ocbackerbadge| |ocsponsorbadge|
 
-:Version: 4.0.2 (latentcall)
+:Version: 4.2.0 (latentcall)
 :Web: http://celeryproject.org/
-:Download: http://pypi.python.org/pypi/celery/
+:Download: https://pypi.org/project/celery/
 :Source: https://github.com/celery/celery/
 :Keywords: task, queue, job, async, rabbitmq, amqp, redis,
   python, distributed, actors
@@ -40,10 +40,10 @@ in such a way that the client enqueues an URL to be requested by a worker.
 What do I need?
 ===============
 
-Celery version 4.0 runs on,
+Celery version 4.2 runs on,
 
-- Python (2.7, 3.4, 3.5)
-- PyPy (5.4, 5.5)
+- Python (2.7, 3.4, 3.5, 3.6)
+- PyPy (5.8)
 
 
 This is the last version to support Python 2.7,
@@ -72,7 +72,7 @@ Get Started
 ===========
 
 If this is the first time you're trying to use Celery, or you're
-new to Celery 4.0 coming from previous versions then you should read our
+new to Celery 4.2 coming from previous versions then you should read our
 getting started tutorials:
 
 - `First steps with Celery`_
@@ -154,8 +154,8 @@ It supports...
 .. _`Eventlet`: http://eventlet.net/
 .. _`gevent`: http://gevent.org/
 
-.. _RabbitMQ: http://rabbitmq.com
-.. _Redis: http://redis.io
+.. _RabbitMQ: https://rabbitmq.com
+.. _Redis: https://redis.io
 .. _SQLAlchemy: http://sqlalchemy.org
 
 Framework Integration
@@ -182,15 +182,15 @@ The integration packages aren't strictly necessary, but they can make
 development easier, and sometimes they add important hooks like closing
 database connections at ``fork``.
 
-.. _`Django`: http://djangoproject.com/
+.. _`Django`: https://djangoproject.com/
 .. _`Pylons`: http://pylonsproject.org/
 .. _`Flask`: http://flask.pocoo.org/
 .. _`web2py`: http://web2py.com/
-.. _`Bottle`: http://bottlepy.org/
+.. _`Bottle`: https://bottlepy.org/
 .. _`Pyramid`: http://docs.pylonsproject.org/en/latest/docs/pyramid.html
-.. _`pyramid_celery`: http://pypi.python.org/pypi/pyramid_celery/
-.. _`celery-pylons`: http://pypi.python.org/pypi/celery-pylons
-.. _`web2py-celery`: http://code.google.com/p/web2py-celery/
+.. _`pyramid_celery`: https://pypi.org/project/pyramid_celery/
+.. _`celery-pylons`: https://pypi.org/project/celery-pylons/
+.. _`web2py-celery`: https://code.google.com/p/web2py-celery/
 .. _`Tornado`: http://www.tornadoweb.org/
 .. _`tornado-celery`: https://github.com/mher/tornado-celery/
 
@@ -271,9 +271,9 @@ Transports and Backends
     for using Redis as a message transport or as a result backend.
 
 :``celery[sqs]``:
-    for using Amazon SQS as a message transport (*experimental*).
+    for using Amazon SQS as a message transport.
 
-:``celery[tblib``]
+:``celery[tblib``]:
     for using the ``task_remote_tracebacks`` feature.
 
 :``celery[memcache]``:
@@ -309,7 +309,7 @@ Transports and Backends
 :``celery[consul]``:
     for using the Consul.io Key/Value store as a message transport or result backend (*experimental*).
 
-:``celery[django]``
+:``celery[django]``:
     specifies the lowest version possible for Django support.
 
     You should probably not use this in your requirements, it's here
@@ -323,7 +323,7 @@ Downloading and installing from source
 
 Download the latest version of Celery from PyPI:
 
-http://pypi.python.org/pypi/celery/
+https://pypi.org/project/celery/
 
 You can install it by doing the following,:
 
@@ -364,7 +364,7 @@ pip commands:
 With git
 ~~~~~~~~
 
-Please the Contributing section.
+Please see the Contributing section.
 
 .. _getting-help:
 
@@ -379,7 +379,7 @@ Mailing list
 For discussions about the usage, development, and future of Celery,
 please join the `celery-users`_ mailing list.
 
-.. _`celery-users`: http://groups.google.com/group/celery-users/
+.. _`celery-users`: https://groups.google.com/group/celery-users/
 
 .. _irc-channel:
 
@@ -389,7 +389,7 @@ IRC
 Come chat with us on IRC. The **#celery** channel is located at the `Freenode`_
 network.
 
-.. _`Freenode`: http://freenode.net
+.. _`Freenode`: https://freenode.net
 
 .. _bug-tracker:
 
@@ -404,14 +404,18 @@ to our issue tracker at https://github.com/celery/celery/issues/
 Wiki
 ====
 
-http://wiki.github.com/celery/celery/
+https://wiki.github.com/celery/celery/
+
+Credits
+=======
 
 .. _contributing-short:
 
-Contributing
-============
+Contributors
+------------
 
-Development of `celery` happens at GitHub: https://github.com/celery/celery
+This project exists thanks to all the people who contribute. Development of
+`celery` happens at GitHub: https://github.com/celery/celery
 
 You're highly encouraged to participate in the development
 of `celery`. If you don't like GitHub (for some reason) you're welcome
@@ -422,6 +426,36 @@ documentation.
 
 .. _`Contributing to Celery`:
     http://docs.celeryproject.org/en/master/contributing.html
+
+|oc-contributors|
+
+.. |oc-contributors| image:: https://opencollective.com/celery/contributors.svg?width=890&button=false
+    :target: https://github.com/celery/celery/graphs/contributors
+
+Backers
+-------
+
+Thank you to all our backers! 🙏 [`Become a backer`_]
+
+.. _`Become a backer`: https://opencollective.com/celery#backer
+
+|oc-backers|
+
+.. |oc-backers| image:: https://opencollective.com/celery/backers.svg?width=890
+    :target: https://opencollective.com/celery#backers
+
+Sponsors
+--------
+
+Support this project by becoming a sponsor. Your logo will show up here with a
+link to your website. [`Become a sponsor`_]
+
+.. _`Become a sponsor`: https://opencollective.com/celery#sponsor
+
+|oc-sponsors|
+
+.. |oc-sponsors| image:: https://opencollective.com/celery/sponsor/0/avatar.svg
+    :target: https://opencollective.com/celery/sponsor/0/website
 
 .. _license:
 
@@ -446,13 +480,20 @@ file in the top distribution directory for the full license text.
 
 .. |wheel| image:: https://img.shields.io/pypi/wheel/celery.svg
     :alt: Celery can be installed via wheel
-    :target: http://pypi.python.org/pypi/celery/
+    :target: https://pypi.org/project/celery/
 
 .. |pyversion| image:: https://img.shields.io/pypi/pyversions/celery.svg
     :alt: Supported Python versions.
-    :target: http://pypi.python.org/pypi/celery/
+    :target: https://pypi.org/project/celery/
 
 .. |pyimp| image:: https://img.shields.io/pypi/implementation/celery.svg
     :alt: Support Python implementations.
-    :target: http://pypi.python.org/pypi/celery/
+    :target: https://pypi.org/project/celery/
 
+.. |ocbackerbadge| image:: https://opencollective.com/celery/backers/badge.svg
+    :alt: Backers on Open Collective
+    :target: #backers
+
+.. |ocsponsorbadge| image:: https://opencollective.com/celery/sponsors/badge.svg
+    :alt: Sponsors on Open Collective
+    :target: #sponsors

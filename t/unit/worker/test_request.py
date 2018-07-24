@@ -3,43 +3,31 @@ from __future__ import absolute_import, unicode_literals
 
 import numbers
 import os
-import pytest
 import signal
 import socket
 import sys
-
 from datetime import datetime, timedelta
+from time import time
 
-from case import Mock, patch
+import pytest
 from billiard.einfo import ExceptionInfo
-from kombu.utils.encoding import default_encode, from_utf8, safe_str, safe_repr
+from case import Mock, patch
+from kombu.utils.encoding import (default_encode, from_utf8, safe_repr,
+                                  safe_str)
 from kombu.utils.uuid import uuid
 
 from celery import states
-from celery.app.trace import (
-    trace_task,
-    _trace_task_ret,
-    TraceInfo,
-    mro_lookup,
-    build_tracer,
-    setup_worker_optimizations,
-    reset_worker_optimizations,
-)
-from celery.exceptions import (
-    Ignore,
-    InvalidTaskError,
-    Reject,
-    Retry,
-    TaskRevokedError,
-    Terminated,
-    WorkerLostError,
-)
+from celery.app.trace import (TraceInfo, _trace_task_ret, build_tracer,
+                              mro_lookup, reset_worker_optimizations,
+                              setup_worker_optimizations, trace_task)
+from celery.exceptions import (Ignore, InvalidTaskError, Reject, Retry,
+                               TaskRevokedError, Terminated, WorkerLostError)
 from celery.five import monotonic
 from celery.signals import task_revoked
 from celery.worker import request as module
-from celery.worker.request import (
-    Request, create_request_cls, logger as req_logger,
-)
+from celery.worker import strategy
+from celery.worker.request import Request, create_request_cls
+from celery.worker.request import logger as req_logger
 from celery.worker.state import revoked
 
 
@@ -209,21 +197,37 @@ class test_trace_task(RequestCase):
 
 class test_Request(RequestCase):
 
-    def get_request(self, sig, Request=Request, **kwargs):
+    def get_request(self,
+                    sig,
+                    Request=Request,
+                    exclude_headers=None,
+                    **kwargs):
+        msg = self.task_message_from_sig(self.app, sig)
+        headers = None
+        if exclude_headers:
+            headers = msg.headers
+            for header in exclude_headers:
+                headers.pop(header)
         return Request(
-            self.task_message_from_sig(self.app, sig),
+            msg,
             on_ack=Mock(name='on_ack'),
             on_reject=Mock(name='on_reject'),
             eventer=Mock(name='eventer'),
             app=self.app,
             connection_errors=(socket.error,),
             task=sig.type,
+            headers=headers,
             **kwargs
         )
 
     def test_shadow(self):
         assert self.get_request(
             self.add.s(2, 2).set(shadow='fooxyz')).name == 'fooxyz'
+
+    def test_no_shadow_header(self):
+        request = self.get_request(self.add.s(2, 2),
+                                   exclude_headers=['shadow'])
+        assert request.name == 't.unit.worker.test_request.add'
 
     def test_invalid_eta_raises_InvalidTaskError(self):
         with pytest.raises(InvalidTaskError):
@@ -530,6 +534,11 @@ class test_Request(RequestCase):
             job.on_accepted(pid=314, time_accepted=monotonic())
             pool.terminate_job.assert_called_with(314, signum)
 
+    def test_on_accepted_time_start(self):
+        job = self.xRequest()
+        job.on_accepted(pid=os.getpid(), time_accepted=monotonic())
+        assert time() - job.time_start < 1
+
     def test_on_success_acks_early(self):
         job = self.xRequest()
         job.time_start = 1
@@ -613,30 +622,38 @@ class test_Request(RequestCase):
         with pytest.raises(InvalidTaskError):
             raise req.execute().exception
 
-    def test_on_timeout(self, patching):
-        warn = patching('celery.worker.request.warn')
+    def test_on_hard_timeout(self, patching):
         error = patching('celery.worker.request.error')
+
+        job = self.xRequest()
+        job.acknowledge = Mock(name='ack')
+        job.task.acks_late = True
+        job.on_timeout(soft=False, timeout=1337)
+        assert 'Hard time limit' in error.call_args[0][0]
+        assert self.mytask.backend.get_status(job.id) == states.FAILURE
+        job.acknowledge.assert_called_with()
+
+        job = self.xRequest()
+        job.acknowledge = Mock(name='ack')
+        job.task.acks_late = False
+        job.on_timeout(soft=False, timeout=1335)
+        job.acknowledge.assert_not_called()
+
+    def test_on_soft_timeout(self, patching):
+        warn = patching('celery.worker.request.warn')
 
         job = self.xRequest()
         job.acknowledge = Mock(name='ack')
         job.task.acks_late = True
         job.on_timeout(soft=True, timeout=1337)
         assert 'Soft time limit' in warn.call_args[0][0]
-        job.on_timeout(soft=False, timeout=1337)
-        assert 'Hard time limit' in error.call_args[0][0]
-        assert self.mytask.backend.get_status(job.id) == states.FAILURE
-        job.acknowledge.assert_called_with()
+        assert self.mytask.backend.get_status(job.id) == states.PENDING
+        job.acknowledge.assert_not_called()
 
         self.mytask.ignore_result = True
         job = self.xRequest()
         job.on_timeout(soft=True, timeout=1336)
         assert self.mytask.backend.get_status(job.id) == states.PENDING
-
-        job = self.xRequest()
-        job.acknowledge = Mock(name='ack')
-        job.task.acks_late = False
-        job.on_timeout(soft=True, timeout=1335)
-        job.acknowledge.assert_not_called()
 
     def test_fast_trace_task(self):
         from celery.app import trace
@@ -1003,6 +1020,40 @@ class test_create_request_class(RequestCase):
             timeout=self.task.time_limit,
             correlation_id=job.id,
         )
+        assert job._apply_result
+        weakref_ref.assert_called_with(self.pool.apply_async())
+        assert job._apply_result is weakref_ref()
+
+    def test_execute_using_pool_with_none_timelimit_header(self):
+        from celery.app.trace import trace_task_ret as trace
+        weakref_ref = Mock(name='weakref.ref')
+        job = self.zRequest(id=uuid(),
+                            revoked_tasks=set(),
+                            ref=weakref_ref,
+                            headers={'timelimit': None})
+        job.execute_using_pool(self.pool)
+        self.pool.apply_async.assert_called_with(
+            trace,
+            args=(job.type, job.id, job.request_dict, job.body,
+                  job.content_type, job.content_encoding),
+            accept_callback=job.on_accepted,
+            timeout_callback=job.on_timeout,
+            callback=job.on_success,
+            error_callback=job.on_failure,
+            soft_timeout=self.task.soft_time_limit,
+            timeout=self.task.time_limit,
+            correlation_id=job.id,
+        )
+        assert job._apply_result
+        weakref_ref.assert_called_with(self.pool.apply_async())
+        assert job._apply_result is weakref_ref()
+
+    def test_execute_using_pool__defaults_of_hybrid_to_proto2(self):
+        weakref_ref = Mock(name='weakref.ref')
+        headers = strategy.hybrid_to_proto2('', {'id': uuid(),
+                                                 'task': self.mytask.name})[1]
+        job = self.zRequest(revoked_tasks=set(), ref=weakref_ref, **headers)
+        job.execute_using_pool(self.pool)
         assert job._apply_result
         weakref_ref.assert_called_with(self.pool.apply_async())
         assert job._apply_result is weakref_ref()

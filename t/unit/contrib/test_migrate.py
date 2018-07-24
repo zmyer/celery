@@ -1,33 +1,19 @@
 from __future__ import absolute_import, unicode_literals
 
-import pytest
-
 from contextlib import contextmanager
 
+import pytest
 from amqp import ChannelError
 from case import Mock, mock, patch
-
-from kombu import Connection, Producer, Queue, Exchange
-
+from kombu import Connection, Exchange, Producer, Queue
 from kombu.transport.virtual import QoS
 
-from celery.contrib.migrate import (
-    StopFiltering,
-    State,
-    migrate_task,
-    migrate_tasks,
-    filter_callback,
-    _maybe_queue,
-    filter_status,
-    move_by_taskmap,
-    move_by_idmap,
-    move_task_by_id,
-    start_filter,
-    task_id_in,
-    task_id_eq,
-    expand_dest,
-    move,
-)
+from celery.contrib.migrate import (State, StopFiltering, _maybe_queue,
+                                    expand_dest, filter_callback,
+                                    filter_status, migrate_task,
+                                    migrate_tasks, move, move_by_idmap,
+                                    move_by_taskmap, move_task_by_id,
+                                    start_filter, task_id_eq, task_id_in)
 from celery.utils.encoding import bytes_t, ensure_bytes
 
 # hack to ignore error at shutdown
@@ -267,8 +253,11 @@ class test_migrate_task:
 class test_migrate_tasks:
 
     def test_migrate(self, app, name='testcelery'):
-        x = Connection('memory://foo')
-        y = Connection('memory://foo')
+        connection_kwargs = {
+            'transport_options': {'polling_interval': 0.01}
+        }
+        x = Connection('memory://foo', **connection_kwargs)
+        y = Connection('memory://foo', **connection_kwargs)
         # use separate state
         x.default_channel.queues = {}
         y.default_channel.queues = {}
@@ -281,7 +270,6 @@ class test_migrate_tasks:
         Producer(x).publish('baz', exchange=name, routing_key=name)
         assert x.default_channel.queues
         assert not y.default_channel.queues
-
         migrate_tasks(x, y, accept=['text/plain'], app=app)
 
         yq = q(y.default_channel)
@@ -309,7 +297,7 @@ class test_migrate_tasks:
             qd.side_effect = effect
             migrate_tasks(x, y, app=app)
 
-        x = Connection('memory://')
+        x = Connection('memory://', **connection_kwargs)
         x.default_channel.queues = {}
         y.default_channel.queues = {}
         callback = Mock()

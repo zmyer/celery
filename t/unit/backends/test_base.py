@@ -1,30 +1,24 @@
 from __future__ import absolute_import, unicode_literals
 
-import pytest
 import sys
 import types
-
 from contextlib import contextmanager
 
+import pytest
 from case import ANY, Mock, call, patch, skip
 
-from celery import states
-from celery import chord, group, uuid
-from celery.backends.base import (
-    BaseBackend,
-    KeyValueStoreBackend,
-    DisabledBackend,
-    _nulldict,
-)
+from celery import chord, group, states, uuid
+from celery.backends.base import (BaseBackend, DisabledBackend,
+                                  KeyValueStoreBackend, _nulldict)
 from celery.exceptions import ChordError, TimeoutError
-from celery.five import items, bytes_if_py2, range
+from celery.five import bytes_if_py2, items, range
 from celery.result import result_from_tuple
 from celery.utils import serialization
 from celery.utils.functional import pass1
-from celery.utils.serialization import subclass_exception
-from celery.utils.serialization import find_pickleable_exception as fnpe
 from celery.utils.serialization import UnpickleableExceptionWrapper
+from celery.utils.serialization import find_pickleable_exception as fnpe
 from celery.utils.serialization import get_pickleable_exception as gpe
+from celery.utils.serialization import subclass_exception
 
 
 class wrapobject(object):
@@ -69,6 +63,12 @@ class test_BaseBackend_interface:
     def setup(self):
         self.b = BaseBackend(self.app)
 
+        @self.app.task(shared=False)
+        def callback(result):
+            pass
+
+        self.callback = callback
+
     def test__forget(self):
         with pytest.raises(NotImplementedError):
             self.b._forget('SOMExx-N0Nex1stant-IDxx-')
@@ -82,11 +82,36 @@ class test_BaseBackend_interface:
 
     def test_apply_chord(self, unlock='celery.chord_unlock'):
         self.app.tasks[unlock] = Mock()
-        self.b.apply_chord(
-            group(app=self.app), (), 'dakj221', None,
-            result=[self.app.AsyncResult(x) for x in [1, 2, 3]],
+        header_result = self.app.GroupResult(
+            uuid(),
+            [self.app.AsyncResult(x) for x in range(3)],
         )
+        self.b.apply_chord(header_result, self.callback.s())
         assert self.app.tasks[unlock].apply_async.call_count
+
+    def test_chord_unlock_queue(self, unlock='celery.chord_unlock'):
+        self.app.tasks[unlock] = Mock()
+        header_result = self.app.GroupResult(
+            uuid(),
+            [self.app.AsyncResult(x) for x in range(3)],
+        )
+        body = self.callback.s()
+
+        self.b.apply_chord(header_result, body)
+        called_kwargs = self.app.tasks[unlock].apply_async.call_args[1]
+        assert called_kwargs['queue'] is None
+
+        self.b.apply_chord(header_result, body.set(queue='test_queue'))
+        called_kwargs = self.app.tasks[unlock].apply_async.call_args[1]
+        assert called_kwargs['queue'] == 'test_queue'
+
+        @self.app.task(shared=False, queue='test_queue_two')
+        def callback_queue(result):
+            pass
+
+        self.b.apply_chord(header_result, callback_queue.s())
+        called_kwargs = self.app.tasks[unlock].apply_async.call_args[1]
+        assert called_kwargs['queue'] == 'test_queue_two'
 
 
 class test_exception_pickle:
@@ -120,6 +145,17 @@ class test_prepare_exception:
         y = self.b.exception_to_python(x)
         assert isinstance(y, KeyError)
 
+    def test_json_exception_arguments(self):
+        self.b.serializer = 'json'
+        x = self.b.prepare_exception(Exception(object))
+        assert x == {
+            'exc_message': serialization.ensure_serializable(
+                (object,), self.b.encode),
+            'exc_type': Exception.__name__,
+            'exc_module': Exception.__module__}
+        y = self.b.exception_to_python(x)
+        assert isinstance(y, Exception)
+
     def test_impossible(self):
         self.b.serializer = 'pickle'
         x = self.b.prepare_exception(Impossible())
@@ -138,6 +174,13 @@ class test_prepare_exception:
         assert isinstance(x, KeyError)
         y = self.b.exception_to_python(x)
         assert isinstance(y, KeyError)
+
+    def test_unicode_message(self):
+        message = u'\u03ac'
+        x = self.b.prepare_exception(Exception(message))
+        assert x == {'exc_message': (message,),
+                     'exc_type': Exception.__name__,
+                     'exc_module': Exception.__module__}
 
 
 class KVBackend(KeyValueStoreBackend):
@@ -185,6 +228,17 @@ class test_BaseBackend_dict:
 
     def setup(self):
         self.b = DictBackend(app=self.app)
+
+        @self.app.task(shared=False, bind=True)
+        def bound_errback(self, result):
+            pass
+
+        @self.app.task(shared=False)
+        def errback(arg1, arg2):
+            errback.last_result = arg1 + arg2
+
+        self.bound_errback = bound_errback
+        self.errback = errback
 
     def test_delete_group(self):
         self.b.delete_group('can-delete')
@@ -271,6 +325,28 @@ class test_BaseBackend_dict:
         b.mark_as_done('id', 10, request=request)
         b.on_chord_part_return.assert_called_with(request, states.SUCCESS, 10)
 
+    def test_mark_as_failure__bound_errback(self):
+        b = BaseBackend(app=self.app)
+        b._store_result = Mock()
+        request = Mock(name='request')
+        request.errbacks = [
+            self.bound_errback.subtask(args=[1], immutable=True)]
+        exc = KeyError()
+        group = self.patching('celery.backends.base.group')
+        b.mark_as_failure('id', exc, request=request)
+        group.assert_called_with(request.errbacks, app=self.app)
+        group.return_value.apply_async.assert_called_with(
+            (request.id, ), parent_id=request.id, root_id=request.root_id)
+
+    def test_mark_as_failure__errback(self):
+        b = BaseBackend(app=self.app)
+        b._store_result = Mock()
+        request = Mock(name='request')
+        request.errbacks = [self.errback.subtask(args=[2, 3], immutable=True)]
+        exc = KeyError()
+        b.mark_as_failure('id', exc, request=request)
+        assert self.errback.last_result == 5
+
     def test_mark_as_failure__chord(self):
         b = BaseBackend(app=self.app)
         b._store_result = Mock()
@@ -346,6 +422,19 @@ class test_KeyValueStoreBackend:
         self.b.forget(tid)
         assert self.b.get_state(tid) == states.PENDING
 
+    def test_store_result_group_id(self):
+        tid = uuid()
+        state = 'SUCCESS'
+        result = 10
+        request = Mock()
+        request.group = 'gid'
+        request.children = []
+        self.b.store_result(
+            tid, state=state, result=result, request=request,
+        )
+        stored_meta = self.b.decode(self.b.get(self.b.get_key_for_task(tid)))
+        assert stored_meta['group_id'] == request.group
+
     def test_strip_prefix(self):
         x = self.b.get_key_for_task('x1b34')
         assert self.b._strip_prefix(x) == 'x1b34'
@@ -357,19 +446,25 @@ class test_KeyValueStoreBackend:
             ids = {uuid(): i for i in range(10)}
             for id, i in items(ids):
                 self.b.mark_as_done(id, i)
-            it = self.b.get_many(list(ids))
+            it = self.b.get_many(list(ids), interval=0.01)
             for i, (got_id, got_state) in enumerate(it):
                 assert got_state['result'] == ids[got_id]
             assert i == 9
-            assert list(self.b.get_many(list(ids)))
+            assert list(self.b.get_many(list(ids), interval=0.01))
 
             self.b._cache.clear()
             callback = Mock(name='callback')
-            it = self.b.get_many(list(ids), on_message=callback)
+            it = self.b.get_many(
+                list(ids),
+                on_message=callback,
+                interval=0.05
+            )
             for i, (got_id, got_state) in enumerate(it):
                 assert got_state['result'] == ids[got_id]
             assert i == 9
-            assert list(self.b.get_many(list(ids)))
+            assert list(
+                self.b.get_many(list(ids), interval=0.01)
+            )
             callback.assert_has_calls([
                 call(ANY) for id in ids
             ])
@@ -520,12 +615,15 @@ class test_KeyValueStoreBackend:
     def test_chord_apply_fallback(self):
         self.b.implements_incr = False
         self.b.fallback_chord_unlock = Mock()
+        header_result = self.app.GroupResult(
+            'group_id',
+            [self.app.AsyncResult(x) for x in range(3)],
+        )
         self.b.apply_chord(
-            group(app=self.app), (), 'group_id', 'body',
-            result='result', foo=1,
+            header_result, 'body', foo=1,
         )
         self.b.fallback_chord_unlock.assert_called_with(
-            'group_id', 'body', result='result', foo=1,
+            header_result, 'body', foo=1,
         )
 
     def test_get_missing_meta(self):

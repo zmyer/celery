@@ -1,11 +1,20 @@
 # -*- coding: utf-8 -*-
 """Couchbase result store backend."""
 from __future__ import absolute_import, unicode_literals
+
 import logging
+
 from kombu.utils.encoding import str_t
 from kombu.utils.url import _parse_url
+
 from celery.exceptions import ImproperlyConfigured
+
 from .base import KeyValueStoreBackend
+
+try:
+    import couchbase_ffi  # noqa
+except ImportError:
+    pass  # noqa
 try:
     from couchbase import Couchbase
     from couchbase.connection import Connection
@@ -13,7 +22,7 @@ try:
 except ImportError:
     Couchbase = Connection = NotFoundError = None   # noqa
 
-__all__ = ['CouchbaseBackend']
+__all__ = ('CouchbaseBackend',)
 
 
 class CouchbaseBackend(KeyValueStoreBackend):
@@ -30,12 +39,15 @@ class CouchbaseBackend(KeyValueStoreBackend):
     username = None
     password = None
     quiet = False
+    supports_autoexpire = True
+
     timeout = 2.5
 
     # Use str as couchbase key not bytes
     key_t = str_t
 
     def __init__(self, url=None, *args, **kwargs):
+        kwargs.setdefault('expires_type', int)
         super(CouchbaseBackend, self).__init__(*args, **kwargs)
         self.url = url
 
@@ -94,7 +106,7 @@ class CouchbaseBackend(KeyValueStoreBackend):
             return None
 
     def set(self, key, value):
-        self.connection.set(key, value)
+        self.connection.set(key, value, ttl=self.expires)
 
     def mget(self, keys):
         return [self.get(key) for key in keys]

@@ -45,10 +45,10 @@ The API defines a standard set of execution options, as well as three methods:
     - ``T.apply_async((arg,), {'kwarg': value})``
 
     - ``T.apply_async(countdown=10)``
-        executes 10 seconds from now.
+        executes in 10 seconds from now.
 
     - ``T.apply_async(eta=now + timedelta(seconds=10))``
-        executes 10 seconds from now, specified using ``eta``
+        executes in 10 seconds from now, specified using ``eta``
 
     - ``T.apply_async(countdown=60, expires=120)``
         executes in one minute from now, but expires after 2 minutes.
@@ -577,6 +577,25 @@ the workers :option:`-Q <celery worker -Q>` argument:
     is to use configuration routers (:setting:`task_routes`).
 
     To find out more about routing, please see :ref:`guide-routing`.
+
+.. _calling-results:
+
+Results options
+===============
+
+You can enable or disable result storage using the ``ignore_result`` option::
+
+    result = add.apply_async(1, 2, ignore_result=True)
+    result.get() # -> None
+
+    # Do not ignore result (default)
+    result = add.apply_async(1, 2, ignore_result=False)
+    result.get() # -> 3
+
+
+.. seealso::
+
+   For more information on tasks, please see :ref:`guide-tasks`.
 
 Advanced Options
 ----------------

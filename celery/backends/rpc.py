@@ -5,9 +5,9 @@ RPC-style result backend, using reply-to and one queue per client.
 """
 from __future__ import absolute_import, unicode_literals
 
-import kombu
 import time
 
+import kombu
 from kombu.common import maybe_declare
 from kombu.utils.compat import register_after_fork
 from kombu.utils.objects import cached_property
@@ -17,9 +17,9 @@ from celery._state import current_task, task_join_will_block
 from celery.five import items, range
 
 from . import base
-from .async import AsyncBackendMixin, BaseResultConsumer
+from .asynchronous import AsyncBackendMixin, BaseResultConsumer
 
-__all__ = ['BacklogLimitExceeded', 'RPCBackend']
+__all__ = ('BacklogLimitExceeded', 'RPCBackend')
 
 E_NO_CHORD_SUPPORT = """
 The "rpc" result backend does not support chords!

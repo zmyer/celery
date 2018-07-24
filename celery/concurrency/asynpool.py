@@ -23,7 +23,6 @@ import socket
 import struct
 import sys
 import time
-
 from collections import deque, namedtuple
 from io import BytesIO
 from numbers import Integral
@@ -31,11 +30,11 @@ from pickle import HIGHEST_PROTOCOL
 from time import sleep
 from weakref import WeakValueDictionary, ref
 
-from billiard.pool import RUN, TERMINATE, ACK, NACK, WorkersJoined
 from billiard import pool as _pool
-from billiard.compat import buf_t, setblocking, isblocking
+from billiard.compat import buf_t, isblocking, setblocking
+from billiard.pool import ACK, NACK, RUN, TERMINATE, WorkersJoined
 from billiard.queues import _SimpleQueue
-from kombu.async import WRITE, ERR
+from kombu.asynchronous import ERR, WRITE
 from kombu.serialization import pickle as _pickle
 from kombu.utils.eventio import SELECT_BAD_FD
 from kombu.utils.functional import fxrange
@@ -51,19 +50,17 @@ from celery.worker import state as worker_state
 
 try:
     from _billiard import read as __read__
-    from struct import unpack_from as _unpack_from
-    memoryview = memoryview
     readcanbuf = True
 
     if sys.version_info[0] == 2 and sys.version_info < (2, 7, 6):
 
-        def unpack_from(fmt, view, _unpack_from=_unpack_from):  # noqa
+        def unpack_from(fmt, view, _unpack_from=struct.unpack_from):  # noqa
             return _unpack_from(fmt, view.tobytes())  # <- memoryview
     else:
         # unpack_from supports memoryview in 2.7.6 and 3.3+
-        unpack_from = _unpack_from  # noqa
+        unpack_from = struct.unpack_from  # noqa
 
-except (ImportError, NameError):  # pragma: no cover
+except ImportError:  # pragma: no cover
 
     def __read__(fd, buf, size, read=os.read):  # noqa
         chunk = read(fd, size)
@@ -76,7 +73,7 @@ except (ImportError, NameError):  # pragma: no cover
     def unpack_from(fmt, iobuf, unpack=struct.unpack):  # noqa
         return unpack(fmt, iobuf.getvalue())  # <-- BytesIO
 
-__all__ = ['AsynPool']
+__all__ = ('AsynPool',)
 
 logger = get_logger(__name__)
 error, debug = logger.error, logger.debug
@@ -180,14 +177,25 @@ def _select(readers=None, writers=None, err=None, timeout=0,
     try:
         return poll(readers, writers, err, timeout)
     except (select.error, socket.error) as exc:
-        if exc.errno == errno.EINTR:
+        # Workaround for celery/celery#4513
+        try:
+            _errno = exc.errno
+        except AttributeError:
+            _errno = exc.args[0]
+
+        if _errno == errno.EINTR:
             return set(), set(), 1
-        elif exc.errno in SELECT_BAD_FD:
+        elif _errno in SELECT_BAD_FD:
             for fd in readers | writers | err:
                 try:
                     select.select([fd], [], [], 0)
                 except (select.error, socket.error) as exc:
-                    if getattr(exc, 'errno', None) not in SELECT_BAD_FD:
+                    try:
+                        _errno = exc.errno
+                    except AttributeError:
+                        _errno = exc.args[0]
+
+                    if _errno not in SELECT_BAD_FD:
                         raise
                     readers.discard(fd)
                     writers.discard(fd)
@@ -1027,7 +1035,6 @@ class AsynPool(_pool.Pool):
 
     def on_shrink(self, n):
         """Shrink the pool by ``n`` processes."""
-        pass
 
     def create_process_queues(self):
         """Create new in, out, etc. queues, returned as a tuple."""

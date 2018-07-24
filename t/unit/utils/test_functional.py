@@ -1,22 +1,15 @@
 from __future__ import absolute_import, unicode_literals
+
 import pytest
-from kombu.utils.functional import lazy
 from case import skip
-from celery.five import range, nextfun
-from celery.utils.functional import (
-    DummyContext,
-    fun_accepts_kwargs,
-    fun_takes_argument,
-    head_from_fun,
-    firstmethod,
-    first,
-    maybe_list,
-    mlazy,
-    padlist,
-    regen,
-    seq_concat_seq,
-    seq_concat_item,
-)
+from kombu.utils.functional import lazy
+
+from celery.five import nextfun, range
+from celery.utils.functional import (DummyContext, first, firstmethod,
+                                     fun_accepts_kwargs, fun_takes_argument,
+                                     head_from_fun, maybe_list, mlazy,
+                                     padlist, regen, seq_concat_item,
+                                     seq_concat_seq)
 
 
 def test_DummyContext():
@@ -165,7 +158,7 @@ class test_head_from_fun:
     @skip.unless_python3()
     def test_regression_3678(self):
         local = {}
-        fun = ('def f(foo, *args, bar=""):'
+        fun = ('def f(foo, *args, bar="", **kwargs):'
                '    return foo, args, bar')
         exec(fun, {}, local)
 
@@ -204,6 +197,18 @@ class test_head_from_fun:
         g(a=1)
         g(a=1, b=2)
         g(a=1, b=2, c=3)
+
+    def test_classmethod(self):
+        class A(object):
+            @classmethod
+            def f(cls, x):
+                return x
+
+        fun = head_from_fun(A.f, bound=False)
+        assert fun(A, 1) == 1
+
+        fun = head_from_fun(A.f, bound=True)
+        assert fun(1) == 1
 
 
 class test_fun_takes_argument:

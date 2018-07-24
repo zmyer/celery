@@ -10,20 +10,18 @@ from __future__ import absolute_import, unicode_literals
 import errno
 import logging
 import os
-
 from collections import defaultdict
 from time import sleep
 
 from billiard.common import restart_state
 from billiard.exceptions import RestartFreqExceeded
-from kombu.async.semaphore import DummyLock
+from kombu.asynchronous.semaphore import DummyLock
 from kombu.utils.compat import _detect_environment
-from kombu.utils.encoding import safe_repr, bytes_t
+from kombu.utils.encoding import bytes_t, safe_repr
 from kombu.utils.limits import TokenBucket
 from vine import ppartial, promise
 
-from celery import bootsteps
-from celery import signals
+from celery import bootsteps, signals
 from celery.app.trace import build_tracer
 from celery.exceptions import InvalidTaskError, NotRegistered
 from celery.five import buffer_t, items, python_2_unicode_compatible, values
@@ -33,15 +31,15 @@ from celery.utils.nodenames import gethostname
 from celery.utils.objects import Bunch
 from celery.utils.text import truncate
 from celery.utils.time import humanize_seconds, rate
-
 from celery.worker import loops
-from celery.worker.state import (
-    task_reserved, maybe_shutdown, reserved_requests,
-)
+from celery.worker.state import (maybe_shutdown, reserved_requests,
+                                 task_reserved)
 
-__all__ = ['Consumer', 'Evloop', 'dump_body']
+__all__ = ('Consumer', 'Evloop', 'dump_body')
 
 CLOSE = bootsteps.CLOSE
+TERMINATE = bootsteps.TERMINATE
+STOP_CONDITIONS = {CLOSE, TERMINATE}
 logger = get_logger(__name__)
 debug, info, warn, error, crit = (logger.debug, logger.info, logger.warning,
                                   logger.error, logger.critical)
@@ -271,41 +269,42 @@ class Consumer(object):
         task_reserved(request)
         self.on_task_request(request)
 
-    def _on_bucket_wakeup(self, bucket, tokens):
-        try:
-            request = bucket.pop()
-        except IndexError:
-            pass
-        else:
-            self._limit_move_to_pool(request)
-            self._schedule_oldest_bucket_request(bucket, tokens)
+    def _schedule_bucket_request(self, bucket):
+        while True:
+            try:
+                request, tokens = bucket.pop()
+            except IndexError:
+                # no request, break
+                break
 
-    def _schedule_oldest_bucket_request(self, bucket, tokens):
-        try:
-            request = bucket.pop()
-        except IndexError:
-            pass
-        else:
-            return self._schedule_bucket_request(request, bucket, tokens)
+            if bucket.can_consume(tokens):
+                self._limit_move_to_pool(request)
+                continue
+            else:
+                # requeue to head, keep the order.
+                bucket.contents.appendleft((request, tokens))
 
-    def _schedule_bucket_request(self, request, bucket, tokens):
-        bucket.can_consume(tokens)
-        bucket.add(request)
-        pri = self._limit_order = (self._limit_order + 1) % 10
-        hold = bucket.expected_time(tokens)
-        self.timer.call_after(
-            hold, self._on_bucket_wakeup, (bucket, tokens),
-            priority=pri,
-        )
+                pri = self._limit_order = (self._limit_order + 1) % 10
+                hold = bucket.expected_time(tokens)
+                self.timer.call_after(
+                    hold, self._schedule_bucket_request, (bucket,),
+                    priority=pri,
+                )
+                # no tokens, break
+                break
 
     def _limit_task(self, request, bucket, tokens):
-        if bucket.contents:
-            return bucket.add(request)
-        return self._schedule_bucket_request(request, bucket, tokens)
+        bucket.add((request, tokens))
+        return self._schedule_bucket_request(bucket)
+
+    def _limit_post_eta(self, request, bucket, tokens):
+        self.qos.decrement_eventually()
+        bucket.add((request, tokens))
+        return self._schedule_bucket_request(bucket)
 
     def start(self):
         blueprint = self.blueprint
-        while blueprint.state != CLOSE:
+        while blueprint.state not in STOP_CONDITIONS:
             maybe_shutdown()
             if self.restart_count:
                 try:
@@ -324,7 +323,7 @@ class Consumer(object):
                 if isinstance(exc, OSError) and exc.errno == errno.EMFILE:
                     raise  # Too many open files
                 maybe_shutdown()
-                if blueprint.state != CLOSE:
+                if blueprint.state not in STOP_CONDITIONS:
                     if self.connection:
                         self.on_connection_error_after_connected(exc)
                     else:

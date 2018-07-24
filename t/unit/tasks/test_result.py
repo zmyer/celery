@@ -1,28 +1,20 @@
 from __future__ import absolute_import, unicode_literals
 
-import pytest
+import copy
 import traceback
-
 from contextlib import contextmanager
 
+import pytest
 from case import Mock, call, patch, skip
 
-from celery import uuid
-from celery import states
+from celery import states, uuid
 from celery.backends.base import SyncBackendMixin
-from celery.exceptions import (
-    CPendingDeprecationWarning, ImproperlyConfigured,
-    IncompleteStream, TimeoutError,
-)
+from celery.exceptions import (CPendingDeprecationWarning,
+                               ImproperlyConfigured, IncompleteStream,
+                               TimeoutError)
 from celery.five import range
-from celery.result import (
-    AsyncResult,
-    EagerResult,
-    ResultSet,
-    GroupResult,
-    result_from_tuple,
-    assert_will_not_block,
-)
+from celery.result import (AsyncResult, EagerResult, GroupResult, ResultSet,
+                           assert_will_not_block, result_from_tuple)
 from celery.utils.serialization import pickle
 
 PYTRACEBACK = """\
@@ -36,10 +28,10 @@ Doesn't matter: really!\
 
 
 def mock_task(name, state, result, traceback=None):
-    return dict(
-        id=uuid(), name=name, state=state,
-        result=result, traceback=traceback,
-    )
+    return {
+        'id': uuid(), 'name': name, 'state': state,
+        'result': result, 'traceback': traceback,
+    }
 
 
 def save_result(app, task):
@@ -60,6 +52,14 @@ def make_mock_group(app, size=10):
     tasks = [mock_task('ts%d' % i, states.SUCCESS, i) for i in range(size)]
     [save_result(app, task) for task in tasks]
     return [app.AsyncResult(task['id']) for task in tasks]
+
+
+class _MockBackend:
+    def add_pending_result(self, *args, **kwargs):
+        return True
+
+    def wait_for_pending(self, *args, **kwargs):
+        return True
 
 
 class test_AsyncResult:
@@ -83,6 +83,12 @@ class test_AsyncResult:
             pass
         self.mytask = mytask
 
+    def test_ignored_getter(self):
+        result = self.app.AsyncResult(uuid())
+        assert result.ignored is False
+        result.__delattr__('_ignored')
+        assert result.ignored is False
+
     @patch('celery.result.task_join_will_block')
     def test_assert_will_not_block(self, task_join_will_block):
         task_join_will_block.return_value = True
@@ -90,6 +96,16 @@ class test_AsyncResult:
             assert_will_not_block()
         task_join_will_block.return_value = False
         assert_will_not_block()
+
+    @patch('celery.result.task_join_will_block')
+    def test_get_sync_subtask_option(self, task_join_will_block):
+        task_join_will_block.return_value = True
+        tid = uuid()
+        backend = _MockBackend()
+        res_subtask_async = AsyncResult(tid, backend=backend)
+        with pytest.raises(RuntimeError):
+            res_subtask_async.get()
+        res_subtask_async.get(disable_sync_subtasks=False)
 
     def test_without_id(self):
         with pytest.raises(ValueError):
@@ -315,6 +331,12 @@ class test_AsyncResult:
         assert isinstance(nok2_res.result, KeyError)
         assert ok_res.info == 'the'
 
+    def test_get_when_ignored(self):
+        result = self.app.AsyncResult(uuid())
+        result.ignored = True
+        # Does not block
+        assert result.get() is None
+
     def test_eq_ne(self):
         r1 = self.app.AsyncResult(self.task1['id'])
         r2 = self.app.AsyncResult(self.task1['id'])
@@ -356,6 +378,19 @@ class test_AsyncResult:
         assert not self.app.AsyncResult(self.task4['id']).ready()
 
         assert not self.app.AsyncResult(uuid()).ready()
+
+    def test_del(self):
+        with patch('celery.result.AsyncResult.backend') as backend:
+            result = self.app.AsyncResult(self.task1['id'])
+            result_clone = copy.copy(result)
+            del result
+            assert backend.remove_pending_result.called_once_with(
+                result_clone
+            )
+
+        result = self.app.AsyncResult(self.task1['id'])
+        result.backend = None
+        del result
 
 
 class test_ResultSet:
@@ -509,12 +544,16 @@ class MockAsyncResultFailure(AsyncResult):
 class MockAsyncResultSuccess(AsyncResult):
     forgotten = False
 
+    def __init__(self, *args, **kwargs):
+        self._result = kwargs.pop('result', 42)
+        super(MockAsyncResultSuccess, self).__init__(*args, **kwargs)
+
     def forget(self):
         self.forgotten = True
 
     @property
     def result(self):
-        return 42
+        return self._result
 
     @property
     def state(self):
@@ -525,17 +564,17 @@ class MockAsyncResultSuccess(AsyncResult):
 
 
 class SimpleBackend(SyncBackendMixin):
-        ids = []
+    ids = []
 
-        def __init__(self, ids=[]):
-            self.ids = ids
+    def __init__(self, ids=[]):
+        self.ids = ids
 
-        def _ensure_not_eager(self):
-            pass
+    def _ensure_not_eager(self):
+        pass
 
-        def get_many(self, *args, **kwargs):
-            return ((id, {'result': i, 'status': states.SUCCESS})
-                    for i, id in enumerate(self.ids))
+    def get_many(self, *args, **kwargs):
+        return ((id, {'result': i, 'status': states.SUCCESS})
+                for i, id in enumerate(self.ids))
 
 
 class test_GroupResult:
@@ -577,6 +616,21 @@ class test_GroupResult:
     def test_eq_other(self):
         assert self.ts != 1
 
+    def test_eq_with_parent(self):
+        # GroupResult instances with different .parent are not equal
+        grp_res = self.app.GroupResult(
+            uuid(), [self.app.AsyncResult(uuid()) for _ in range(10)],
+            parent=self.app.AsyncResult(uuid())
+        )
+        grp_res_2 = self.app.GroupResult(grp_res.id, grp_res.results)
+        assert grp_res != grp_res_2
+
+        grp_res_2.parent = self.app.AsyncResult(uuid())
+        assert grp_res != grp_res_2
+
+        grp_res_2.parent = grp_res.parent
+        assert grp_res == grp_res_2
+
     @pytest.mark.usefixtures('depends_on_current_app')
     def test_pickleable(self):
         assert pickle.loads(pickle.dumps(self.ts))
@@ -597,6 +651,37 @@ class test_GroupResult:
         for sub in subs:
             assert sub.forgotten
 
+    def test_get_nested_without_native_join(self):
+        backend = SimpleBackend()
+        backend.supports_native_join = False
+        ts = self.app.GroupResult(uuid(), [
+            MockAsyncResultSuccess(uuid(), result='1.1',
+                                   app=self.app, backend=backend),
+            self.app.GroupResult(uuid(), [
+                MockAsyncResultSuccess(uuid(), result='2.1',
+                                       app=self.app, backend=backend),
+                self.app.GroupResult(uuid(), [
+                    MockAsyncResultSuccess(uuid(), result='3.1',
+                                           app=self.app, backend=backend),
+                    MockAsyncResultSuccess(uuid(), result='3.2',
+                                           app=self.app, backend=backend),
+                ]),
+            ]),
+        ])
+        ts.app.backend = backend
+
+        vals = ts.get()
+        assert vals == [
+            '1.1',
+            [
+                '2.1',
+                [
+                    '3.1',
+                    '3.2',
+                ]
+            ],
+        ]
+
     def test_getitem(self):
         subs = [MockAsyncResultSuccess(uuid(), app=self.app),
                 MockAsyncResultSuccess(uuid(), app=self.app)]
@@ -616,12 +701,30 @@ class test_GroupResult:
         with pytest.raises(AttributeError):
             self.app.GroupResult.restore(ts.id, backend=object())
 
+    def test_save_restore_empty(self):
+        subs = []
+        ts = self.app.GroupResult(uuid(), subs)
+        ts.save()
+        assert isinstance(
+            self.app.GroupResult.restore(ts.id),
+            self.app.GroupResult,
+        )
+        assert self.app.GroupResult.restore(ts.id).results == ts.results == []
+
     def test_restore_app(self):
         subs = [MockAsyncResultSuccess(uuid(), app=self.app)]
         ts = self.app.GroupResult(uuid(), subs)
         ts.save()
         restored = GroupResult.restore(ts.id, app=self.app)
         assert restored.id == ts.id
+
+    def test_restore_current_app_fallback(self):
+        subs = [MockAsyncResultSuccess(uuid(), app=self.app)]
+        ts = self.app.GroupResult(uuid(), subs)
+        ts.save()
+        with pytest.raises(RuntimeError,
+                           message="Test depends on current_app"):
+            GroupResult.restore(ts.id)
 
     def test_join_native(self):
         backend = SimpleBackend()
@@ -847,6 +950,15 @@ class test_EagerResult:
         res = self.raising.apply(args=[3, 3])
         assert not res.revoke()
 
+    @patch('celery.result.task_join_will_block')
+    def test_get_sync_subtask_option(self, task_join_will_block):
+        task_join_will_block.return_value = True
+        tid = uuid()
+        res_subtask_async = EagerResult(tid, 'x', 'x', states.SUCCESS)
+        with pytest.raises(RuntimeError):
+            res_subtask_async.get()
+        res_subtask_async.get(disable_sync_subtasks=False)
+
 
 class test_tuples:
 
@@ -874,3 +986,30 @@ class test_tuples:
         )
         assert x, result_from_tuple(x.as_tuple() == self.app)
         assert x, result_from_tuple(x == self.app)
+
+    def test_GroupResult_with_parent(self):
+        parent = self.app.AsyncResult(uuid())
+        result = self.app.GroupResult(
+            uuid(), [self.app.AsyncResult(uuid()) for _ in range(10)],
+            parent
+        )
+        second_result = result_from_tuple(result.as_tuple(), self.app)
+        assert second_result == result
+        assert second_result.parent == parent
+
+    def test_GroupResult_as_tuple(self):
+        parent = self.app.AsyncResult(uuid())
+        result = self.app.GroupResult(
+            'group-result-1',
+            [self.app.AsyncResult('async-result-{}'.format(i))
+             for i in range(2)],
+            parent
+        )
+        (result_id, parent_tuple), group_results = result.as_tuple()
+        assert result_id == result.id
+        assert parent_tuple == parent.as_tuple()
+        assert parent_tuple[0][0] == parent.id
+        assert isinstance(group_results, list)
+        expected_grp_res = [(('async-result-{}'.format(i), None), None)
+                            for i in range(2)]
+        assert group_results == expected_grp_res

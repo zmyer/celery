@@ -66,10 +66,10 @@ consider enabling the :setting:`task_reject_on_worker_lost` setting.
 
     The default prefork pool scheduler is not friendly to long-running tasks,
     so if you have tasks that run for minutes/hours make sure you enable
-    the -Ofair`` command-line argument to the :program:`celery worker`.
-    See :ref:`prefork-pool-prefetch` for more information, and for the
-    best performance route long-running and short-running tasks to
-    dedicated workers (:ref:`routing-automatic`).
+    the :option:`-Ofair <celery worker -O>` command-line argument to
+    the :program:`celery worker`. See :ref:`prefork-pool-prefetch` for more
+    information, and for the best performance route long-running and
+    short-running tasks to dedicated workers (:ref:`routing-automatic`).
 
     If your worker hangs then please investigate what tasks are running
     before submitting an issue, as most likely the hanging is caused
@@ -173,7 +173,7 @@ The ``base`` argument to the task decorator specifies the base class of the task
     class MyTask(celery.Task):
 
         def on_failure(self, exc, task_id, args, kwargs, einfo):
-            print('{0!r} failed: {1!r}'.format(task_id, exc)
+            print('{0!r} failed: {1!r}'.format(task_id, exc))
 
     @task(base=MyTask)
     def add(x, y):
@@ -243,7 +243,7 @@ Automatic naming and relative imports
 
 .. sidebar:: Absolute Imports
 
-    The best practice for developers targetting Python 2 is to add the
+    The best practice for developers targeting Python 2 is to add the
     following to the top of **every module**:
 
     .. code-block:: python
@@ -330,7 +330,7 @@ Changing the automatic naming behavior
 .. versionadded:: 4.0
 
 There are some cases when the default automatic naming isn't suitable.
-Consider you have many tasks within many different modules::
+Consider having many tasks within many different modules::
 
     project/
            /__init__.py
@@ -574,6 +574,8 @@ You can disable the argument checking for any task by setting its
     >>> add.delay(8)
     <AsyncResult: f59d71ca-1549-43e0-be41-4e8821a83c0c>
 
+.. _task-hiding-sensitive-information:
+
 Hiding sensitive information in arguments
 -----------------------------------------
 
@@ -705,7 +707,7 @@ Sometimes you just want to retry a task whenever a particular exception
 is raised.
 
 Fortunately, you can tell Celery to automatically retry a task using
-`autoretry_for` argument in `~@Celery.task` decorator:
+`autoretry_for` argument in the :meth:`~@Celery.task` decorator:
 
 .. code-block:: python
 
@@ -715,8 +717,8 @@ Fortunately, you can tell Celery to automatically retry a task using
     def refresh_timeline(user):
         return twitter.refresh_timeline(user)
 
-If you want to specify custom arguments for internal `~@Task.retry`
-call, pass `retry_kwargs` argument to `~@Celery.task` decorator:
+If you want to specify custom arguments for an internal :meth:`~@Task.retry`
+call, pass `retry_kwargs` argument to :meth:`~@Celery.task` decorator:
 
 .. code-block:: python
 
@@ -745,6 +747,68 @@ If you want to automatically retry on any error, simply use:
     @app.task(autoretry_for=(Exception,))
     def x():
         ...
+
+.. versionadded:: 4.2
+
+If your tasks depend on another service, like making a request to an API,
+then it's a good idea to use `exponential backoff`_ to avoid overwhelming the
+service with your requests. Fortunately, Celery's automatic retry support
+makes it easy. Just specify the :attr:`~Task.retry_backoff` argument, like this:
+
+.. code-block:: python
+
+    from requests.exceptions import RequestException
+
+    @app.task(autoretry_for=(RequestException,), retry_backoff=True)
+    def x():
+        ...
+
+By default, this exponential backoff will also introduce random jitter_ to
+avoid having all the tasks run at the same moment. It will also cap the
+maximum backoff delay to 10 minutes. All these settings can be customized
+via options documented below.
+
+.. attribute:: Task.autoretry_for
+
+    A list/tuple of exception classes. If any of these exceptions are raised
+    during the execution of the task, the task will automatically be retried.
+    By default, no exceptions will be autoretried.
+
+.. attribute:: Task.retry_kwargs
+
+    A dictionary. Use this to customize how autoretries are executed.
+    Note that if you use the exponential backoff options below, the `countdown`
+    task option will be determined by Celery's autoretry system, and any
+    `countdown` included in this dictionary will be ignored.
+
+.. attribute:: Task.retry_backoff
+
+    A boolean, or a number. If this option is set to ``True``, autoretries
+    will be delayed following the rules of `exponential backoff`_. The first
+    retry will have a delay of 1 second, the second retry will have a delay
+    of 2 seconds, the third will delay 4 seconds, the fourth will delay 8
+    seconds, and so on. (However, this delay value is modified by
+    :attr:`~Task.retry_jitter`, if it is enabled.)
+    If this option is set to a number, it is used as a
+    delay factor. For example, if this option is set to ``3``, the first retry
+    will delay 3 seconds, the second will delay 6 seconds, the third will
+    delay 12 seconds, the fourth will delay 24 seconds, and so on. By default,
+    this option is set to ``False``, and autoretries will not be delayed.
+
+.. attribute:: Task.retry_backoff_max
+
+    A number. If ``retry_backoff`` is enabled, this option will set a maximum
+    delay in seconds between task autoretries. By default, this option is set to ``600``,
+    which is 10 minutes.
+
+.. attribute:: Task.retry_jitter
+
+    A boolean. `Jitter`_ is used to introduce randomness into
+    exponential backoff delays, to prevent all tasks in the queue from being
+    executed simultaneously. If this option is set to ``True``, the delay
+    value calculated by :attr:`~Task.retry_backoff` is treated as a maximum,
+    and the actual delay value will be a random number between zero and that
+    maximum. By default, this option is set to ``True``.
 
 .. _task-options:
 
@@ -954,7 +1018,7 @@ different strengths and weaknesses (see :ref:`task-result-backends`).
 During its lifetime a task will transition through several possible states,
 and each state may have arbitrary meta-data attached to it. When a task
 moves into a new state the previous state is
-forgotten about, but some transitions can be deducted, (e.g., a task now
+forgotten about, but some transitions can be deduced, (e.g., a task now
 in the :state:`FAILED` state, is implied to have been in the
 :state:`STARTED` state at some point).
 
@@ -980,6 +1044,14 @@ Memcached, RabbitMQ/QPid (``rpc``), and Redis -- or you can define your own.
 No backend works well for every use case.
 You should read about the strengths and weaknesses of each backend, and choose
 the most appropriate for your needs.
+
+.. warning::
+
+    Backends use resources to store and transmit results. To ensure
+    that resources are released, you must eventually call
+    :meth:`~@AsyncResult.get` or :meth:`~@AsyncResult.forget` on
+    EVERY :class:`~@AsyncResult` instance returned after calling
+    a task.
 
 .. seealso::
 
@@ -1436,6 +1508,69 @@ Handlers
 
     The return value of this handler is ignored.
 
+.. _task-requests-and-custom-requests:
+
+Requests and custom requests
+----------------------------
+
+Upon receiving a message to run a task, the `worker <guide-workers>`:ref:
+creates a `request <celery.worker.request.Request>`:class: to represent such
+demand.
+
+Custom task classes may override which request class to use by changing the
+attribute `celery.app.task.Task.Request`:attr:.  You may either assign the
+custom request class itself, or its fully qualified name.
+
+The request has several responsibilities.  Custom request classes should cover
+them all -- they are responsible to actually run and trace the task.  We
+strongly recommend to inherit from `celery.worker.request.Request`:class:.
+
+When using the `pre-forking worker <worker-concurrency>`:ref:, the methods
+`~celery.worker.request.Request.on_timeout`:meth: and
+`~celery.worker.request.Request.on_failure`:meth: are executed in the main
+worker process.  An application may leverage such facility to detect failures
+which are not detected using `celery.app.task.Task.on_failure`:meth:.
+
+As an example, the following custom request detects and logs hard time
+limits, and other failures.
+
+.. code-block:: python
+
+   import logging
+   from celery.worker.request import Request
+
+   logger = logging.getLogger('my.package')
+
+   class MyRequest(Request):
+       'A minimal custom request to log failures and hard time limits.'
+
+       def on_timeout(self, soft, timeout):
+           super(MyRequest, self).on_timeout(soft, timeout)
+           if not soft:
+              logger.warning(
+                  'A hard timeout was enforced for task %s',
+                  self.task.name
+              )
+
+       def on_failure(self, exc_info, send_failed_event=True, return_ok=False):
+           super(Request, self).on_failure(
+               exc_info,
+               send_failed_event=send_failed_event,
+               return_ok=return_ok
+           )
+           logger.warning(
+               'Failure detected for task %s',
+               self.task.name
+           )
+
+   class MyTask(Task):
+       Request = MyRequest  # you can use a FQN 'my.package:MyRequest'
+
+   @app.task(base=MyTask)
+   def some_longrunning_task():
+       # use your imagination
+
+
 .. _task-how-they-work:
 
 How it works
@@ -1459,7 +1594,7 @@ yourself:
      'celery.chord':
         <@task: celery.chord>}
 
-This is the list of tasks built-in to Celery. Note that tasks
+This is the list of tasks built into Celery. Note that tasks
 will only be registered when the module they're defined in is imported.
 
 The default loader imports any modules listed in the
@@ -1498,6 +1633,34 @@ wastes time and resources.
 
 Results can even be disabled globally using the :setting:`task_ignore_result`
 setting.
+
+.. versionadded::4.2
+
+Results can be enabled/disabled on a per-execution basis, by passing the ``ignore_result`` boolean parameter,
+when calling ``apply_async`` or ``delay``.
+
+.. code-block:: python
+
+    @app.task
+    def mytask(x, y):
+        return x + y
+
+    # No result will be stored
+    result = mytask.apply_async(1, 2, ignore_result=True)
+    print result.get() # -> None
+
+    # Result will be stored
+    result = mytask.apply_async(1, 2, ignore_result=False)
+    print result.get() # -> 3
+
+By default tasks will *not ignore results* (``ignore_result=False``) when a result backend is configured.
+
+
+The option precedence order is the following:
+
+1. Global :setting:`task_ignore_result`
+2. :attr:`~@Task.ignore_result` option
+3. Task execution option ``ignore_result``
 
 More optimization tips
 ----------------------
@@ -1565,6 +1728,32 @@ different :func:`~celery.signature`'s.
 You can read about chains and other powerful constructs
 at :ref:`designing-workflows`.
 
+By default Celery will not enable you to run tasks within task synchronously
+in rare or extreme cases you might have to do so.
+**WARNING**:
+enabling subtasks run synchronously is not recommended!
+
+.. code-block:: python
+
+    @app.task
+    def update_page_info(url):
+        page = fetch_page.delay(url).get(disable_sync_subtasks=False)
+        info = parse_page.delay(url, page).get(disable_sync_subtasks=False)
+        store_page_info.delay(url, info)
+
+    @app.task
+    def fetch_page(url):
+        return myhttplib.get(url)
+
+    @app.task
+    def parse_page(url, page):
+        return myparser.parse_document(page)
+
+    @app.task
+    def store_page_info(url, info):
+        return PageInfo.objects.create(url, info)
+
+
 .. _task-performance-and-strategies:
 
 Performance and Strategies
@@ -1627,7 +1816,7 @@ system, like `memcached`_.
 State
 -----
 
-Since celery is a distributed system, you can't know which process, or
+Since Celery is a distributed system, you can't know which process, or
 on what machine the task will be executed. You can't even know if the task will
 run in a timely manner.
 
@@ -1714,35 +1903,23 @@ There's a race condition if the task starts executing
 before the transaction has been committed; The database object doesn't exist
 yet!
 
-The solution is to *always commit transactions before sending tasks
-depending on state from the current transaction*:
+The solution is to use the ``on_commit`` callback to launch your Celery task
+once all transactions have been committed successfully.
 
 .. code-block:: python
 
-    @transaction.commit_manually
+    from django.db.transaction import on_commit
+
     def create_article(request):
-        try:
-            article = Article.objects.create()
-        except:
-            transaction.rollback()
-            raise
-        else:
-            transaction.commit()
-            expand_abbreviations.delay(article.pk)
+        article = Article.objects.create()
+        on_commit(lambda: expand_abbreviations.delay(article.pk))
 
 .. note::
-    Django 1.6 (and later) now enables autocommit mode by default,
-    and ``commit_on_success``/``commit_manually`` are deprecated.
+    ``on_commit`` is available in Django 1.9 and above, if you are using a
+    version prior to that then the `django-transaction-hooks`_ library
+    adds support for this.
 
-    This means each SQL query is wrapped and executed in individual
-    transactions, making it less likely to experience the
-    problem described above.
-
-    However, enabling ``ATOMIC_REQUESTS`` on the database
-    connection will bring back the transaction-per-request model and the
-    race condition along with it. In this case, the simple solution is
-    using the ``@transaction.non_atomic_requests`` decorator to go back
-    to autocommit for that view only.
+.. _`django-transaction-hooks`: https://github.com/carljm/django-transaction-hooks
 
 .. _task-example:
 
@@ -1881,3 +2058,5 @@ To make API calls to `Akismet`_ I use the `akismet.py`_ library written by
 .. _`Akismet`: http://akismet.com/faq/
 .. _`akismet.py`: http://www.voidspace.org.uk/downloads/akismet.py
 .. _`Michael Foord`: http://www.voidspace.org.uk/
+.. _`exponential backoff`: https://en.wikipedia.org/wiki/Exponential_backoff
+.. _`jitter`: https://en.wikipedia.org/wiki/Jitter

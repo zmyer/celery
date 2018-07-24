@@ -3,31 +3,26 @@
 from __future__ import absolute_import, unicode_literals
 
 import numbers
-import sys
-
 from collections import Mapping, namedtuple
 from datetime import timedelta
 from weakref import WeakValueDictionary
 
-from kombu import pools
-from kombu import Connection, Consumer, Exchange, Producer, Queue
+from kombu import Connection, Consumer, Exchange, Producer, Queue, pools
 from kombu.common import Broadcast
 from kombu.utils.functional import maybe_list
 from kombu.utils.objects import cached_property
 
 from celery import signals
-from celery.five import items, string_t
+from celery.five import PY3, items, string_t
 from celery.local import try_import
 from celery.utils.nodenames import anon_nodename
 from celery.utils.saferepr import saferepr
 from celery.utils.text import indent as textindent
-from celery.utils.time import maybe_make_aware, to_utc
+from celery.utils.time import maybe_make_aware
 
 from . import routes as _routes
 
-__all__ = ['AMQP', 'Queues', 'task_message']
-
-PY3 = sys.version_info[0] == 3
+__all__ = ('AMQP', 'Queues', 'task_message')
 
 #: earliest date supported by time.mktime.
 INT_MIN = -2147483648
@@ -198,9 +193,9 @@ class Queues(dict):
         if exclude:
             exclude = maybe_list(exclude)
             if self._consume_from is None:
-                # using selection
+                # using all queues
                 return self.select(k for k in self if k not in exclude)
-            # using all queues
+            # using selection
             for queue in exclude:
                 self._consume_from.pop(queue, None)
 
@@ -330,8 +325,11 @@ class AMQP(object):
             expires = maybe_make_aware(
                 now + timedelta(seconds=expires), tz=timezone,
             )
-        eta = eta and eta.isoformat()
-        expires = expires and expires.isoformat()
+        if not isinstance(eta, string_t):
+            eta = eta and eta.isoformat()
+        # If we retry a task `expires` will already be ISO8601-formatted.
+        if not isinstance(expires, string_t):
+            expires = expires and expires.isoformat()
 
         if argsrepr is None:
             argsrepr = saferepr(args, self.argsrepr_maxsize)
@@ -354,6 +352,7 @@ class AMQP(object):
                 'lang': 'py',
                 'task': name,
                 'id': task_id,
+                'shadow': shadow,
                 'eta': eta,
                 'expires': expires,
                 'group': group_id,
@@ -396,7 +395,8 @@ class AMQP(object):
                    chord=None, callbacks=None, errbacks=None, reply_to=None,
                    time_limit=None, soft_time_limit=None,
                    create_sent_event=False, root_id=None, parent_id=None,
-                   shadow=None, now=None, timezone=None):
+                   shadow=None, now=None, timezone=None,
+                   **compat_kwargs):
         args = args or ()
         kwargs = kwargs or {}
         utc = self.utc
@@ -407,17 +407,11 @@ class AMQP(object):
         if countdown:  # convert countdown to ETA
             self._verify_seconds(countdown, 'countdown')
             now = now or self.app.now()
-            timezone = timezone or self.app.timezone
             eta = now + timedelta(seconds=countdown)
-            if utc:
-                eta = to_utc(eta).astimezone(timezone)
         if isinstance(expires, numbers.Real):
             self._verify_seconds(expires, 'expires')
             now = now or self.app.now()
-            timezone = timezone or self.app.timezone
             expires = now + timedelta(seconds=expires)
-            if utc:
-                expires = to_utc(expires).astimezone(timezone)
         eta = eta and eta.isoformat()
         expires = expires and expires.isoformat()
 
@@ -525,8 +519,8 @@ class AMQP(object):
                     exchange_type = 'direct'
 
             # convert to anon-exchange, when exchange not set and direct ex.
-            if not exchange or not routing_key and exchange_type == 'direct':
-                    exchange, routing_key = '', qname
+            if (not exchange or not routing_key) and exchange_type == 'direct':
+                exchange, routing_key = '', qname
             elif exchange is None:
                 # not topic exchange, and exchange not undefined
                 exchange = queue.exchange.name or default_exchange
@@ -544,7 +538,7 @@ class AMQP(object):
                     sender=name, body=body,
                     exchange=exchange, routing_key=routing_key,
                     declare=declare, headers=headers2,
-                    properties=kwargs, retry_policy=retry_policy,
+                    properties=properties, retry_policy=retry_policy,
                 )
             ret = producer.publish(
                 body,
